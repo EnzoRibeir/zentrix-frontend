@@ -2,6 +2,7 @@
   "expo": {
     "name": "zentrix-app",
     "slug": "zentrix-app",
+    "owner": "mandrak24",
     "version": "1.0.0",
     "scheme": "zentrix",
     "orientation": "portrait",
