@@ -4,6 +4,10 @@
   "framework": null,
   "rewrites": [
     {
+      "source": "/api/zentrix",
+      "destination": "https://agog0k90kc.execute-api.sa-east-1.amazonaws.com/default/api-financas-ia"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

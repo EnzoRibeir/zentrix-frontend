@@ -10,15 +10,33 @@
  * - DELETE → Excluir transação por ID
  */
 
+import { Platform } from 'react-native';
+
 // ===========================================
 // CONFIGURAÇÕES EXPORTADAS (Fonte Única)
 // ===========================================
 
-/** URL base da API no AWS API Gateway (região sa-east-1 — São Paulo) */
-export const URL_BASE = 'https://agog0k90kc.execute-api.sa-east-1.amazonaws.com/default/api-financas-ia';
+/** URL direta da API no AWS API Gateway (região sa-east-1 — São Paulo) */
+export const AWS_API_URL = 'https://agog0k90kc.execute-api.sa-east-1.amazonaws.com/default/api-financas-ia';
 
-/** URL pública que serve a página HTML de login com o Telegram Widget */
-export const AUTH_PAGE_URL_BASE = `${URL_BASE}?action=telegram-login`;
+const isWebHospedado =
+  Platform.OS === 'web' &&
+  typeof window !== 'undefined' &&
+  window.location.hostname !== 'localhost' &&
+  window.location.hostname !== '127.0.0.1';
+
+/**
+ * Em Web hospedado (Vercel / PWA), usa a rota same-origin `/api/zentrix` (rewrite para AWS),
+ * eliminando bloqueios de CORS do API Gateway HTTP API v2.
+ * No Mobile (Expo Go / nativo) e localhost, usa o endpoint direto da AWS.
+ */
+export const URL_BASE = isWebHospedado ? '/api/zentrix' : AWS_API_URL;
+
+/**
+ * A página HTML com o Telegram Login Widget deve sempre abrir no domínio
+ * registrado no @BotFather (AWS API Gateway).
+ */
+export const AUTH_PAGE_URL_BASE = `${AWS_API_URL}?action=telegram-login`;
 
 /** Tempo limite padrão para requisições (em milissegundos) */
 const TIMEOUT_PADRAO_MS = 15000;
