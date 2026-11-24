@@ -1,96 +1,201 @@
 /**
  * ============================================================
- * CALCULADORES.JS — Funções de Cálculo do App Zentrix
+ * CALCULADORES.JS — Motor de Cálculo Financeiro do Zentrix
  * ============================================================
- * 
- * Funções que processam a lista de transações e geram
- * dados agregados para os gráficos e cards de resumo.
+ *
+ * Funções puras (sem dependências de UI) para:
+ * - Rateio mensal de compras parceladas e empréstimos
+ * - Filtragem por período ('Este mês', 'Últimos 3 meses', 'Este ano', 'Tudo')
+ * - Totais de gastos, valores a receber, saldo e média diária
+ * - Agrupamento por categoria e evolução acumulada
+ * - Comparativos reais (mês atual vs. mês anterior e vs. mesmo mês do ano anterior)
  */
 
-import { CORES_CATEGORIAS } from '../constantes/cores';
+import { CORES_CATEGORIAS } from '../constantes/cores.js';
+
+export const PERIODOS_RELATORIO = {
+  ESTE_MES: 'Este mês',
+  ULTIMOS_3_MESES: 'Últimos 3 meses',
+  ESTE_ANO: 'Este ano',
+  TUDO: 'Tudo',
+};
 
 /**
- * Função central para calcular qual o valor da transação no MÊS ATUAL.
- * 
- * - Débito / Crédito à Vista: 
- *     Se for do mês atual -> valor total
- *     Se for de outro mês -> 0
- * 
- * - Crédito Parcelado / Emprestado:
- *     Se a diferença de meses entre hoje e a compra for >= 0 e < num_parcelas -> valor / num_parcelas
- *     Senão -> 0
+ * Calcula quanto uma transação impacta em um mês/ano específico (mesAlvo: 0..11).
+ *
+ * - Débito / Crédito à Vista: conta 100% apenas no mês/ano exato de criação.
+ * - Crédito Parcelado / Emprestado (parcelas > 1):
+ *   conta `amount / installments_total` nos `installments_total` meses a partir da compra.
  */
-export const obterValorNoMesAtual = (transacao) => {
-  const agora = new Date();
-  const dataTransacao = new Date(transacao.created_at);
-  const valorTotal = parseFloat(transacao.amount || 0);
-  
-  // Meses de diferença (ex: se comprou mês passado e hoje é este mês = 1)
-  const diffMeses = (agora.getFullYear() - dataTransacao.getFullYear()) * 12 
-                    + (agora.getMonth() - dataTransacao.getMonth());
+export const obterValorNoMesEspecifico = (transacao, anoAlvo, mesAlvo) => {
+  if (!transacao || transacao.status === 'deleted') return 0;
 
-  const parcelas = parseInt(transacao.installments_total || 1, 10);
+  const dataTransacao = new Date(transacao.created_at);
+  if (isNaN(dataTransacao.getTime())) return 0;
+
+  const valorTotal = parseFloat(transacao.amount || 0);
+  if (isNaN(valorTotal) || valorTotal <= 0) return 0;
+
+  const diffMeses =
+    (anoAlvo - dataTransacao.getFullYear()) * 12 +
+    (mesAlvo - dataTransacao.getMonth());
+
+  const parcelas = Math.max(1, parseInt(transacao.installments_total || 1, 10));
   const tipo = transacao.type;
 
-  // Parcelados e Empréstimos
   if ((tipo === 'Crédito Parcelado' || tipo === 'Emprestado') && parcelas > 1) {
     if (diffMeses >= 0 && diffMeses < parcelas) {
       return valorTotal / parcelas;
     }
-    return 0; // Já acabou de pagar ou é uma data no futuro
+    return 0;
   }
 
-  // À vista / Débito (só contam no mês exato da compra)
-  if (diffMeses === 0) {
-    return valorTotal;
+  return diffMeses === 0 ? valorTotal : 0;
+};
+
+/**
+ * Mantém compatibilidade direta para cálculos do mês corrente.
+ */
+export const obterValorNoMesAtual = (transacao, dataReferencia = new Date()) => {
+  return obterValorNoMesEspecifico(
+    transacao,
+    dataReferencia.getFullYear(),
+    dataReferencia.getMonth()
+  );
+};
+
+/**
+ * Retorna a lista de pares { ano, mes } que compõem o período selecionado.
+ */
+const obterMesesDoPeriodo = (periodo, dataReferencia = new Date()) => {
+  const anoAtual = dataReferencia.getFullYear();
+  const mesAtual = dataReferencia.getMonth();
+
+  if (periodo === PERIODOS_RELATORIO.ULTIMOS_3_MESES) {
+    const meses = [];
+    for (let i = 2; i >= 0; i--) {
+      const d = new Date(anoAtual, mesAtual - i, 1);
+      meses.push({ ano: d.getFullYear(), mes: d.getMonth() });
+    }
+    return meses;
   }
 
-  return 0;
+  if (periodo === PERIODOS_RELATORIO.ESTE_ANO) {
+    const meses = [];
+    for (let m = 0; m <= mesAtual; m++) {
+      meses.push({ ano: anoAtual, mes: m });
+    }
+    return meses;
+  }
+
+  // Padrão: 'Este mês'
+  return [{ ano: anoAtual, mes: mesAtual }];
+};
+
+/**
+ * Calcula o valor efetivo de uma transação dentro do período selecionado.
+ */
+export const obterValorNoPeriodo = (
+  transacao,
+  periodo = PERIODOS_RELATORIO.ESTE_MES,
+  dataReferencia = new Date()
+) => {
+  if (!transacao || transacao.status === 'deleted') return 0;
+
+  if (periodo === PERIODOS_RELATORIO.TUDO) {
+    const val = parseFloat(transacao.amount || 0);
+    return isNaN(val) || val <= 0 ? 0 : val;
+  }
+
+  const meses = obterMesesDoPeriodo(periodo, dataReferencia);
+  return meses.reduce(
+    (acc, { ano, mes }) => acc + obterValorNoMesEspecifico(transacao, ano, mes),
+    0
+  );
 };
 
 // ===========================================
-// CÁLCULOS DE TOTAIS
+// CÁLCULOS DE TOTAIS (Suportam período opcional)
 // ===========================================
 
-export const calcularTotalGasto = (transacoes) => {
-  return transacoes
-    .filter((t) => t.type !== 'Emprestado')
-    .reduce((soma, t) => soma + obterValorNoMesAtual(t), 0);
+export const calcularTotalGasto = (
+  transacoes,
+  periodo = PERIODOS_RELATORIO.ESTE_MES,
+  dataReferencia = new Date()
+) => {
+  return (transacoes || [])
+    .filter((t) => t.type !== 'Emprestado' && t.status !== 'deleted')
+    .reduce((soma, t) => soma + obterValorNoPeriodo(t, periodo, dataReferencia), 0);
 };
 
-export const calcularTotalRecebido = (transacoes) => {
-  return transacoes
-    .filter((t) => t.type === 'Emprestado')
-    .reduce((soma, t) => soma + obterValorNoMesAtual(t), 0);
+export const calcularTotalRecebido = (
+  transacoes,
+  periodo = PERIODOS_RELATORIO.ESTE_MES,
+  dataReferencia = new Date()
+) => {
+  return (transacoes || [])
+    .filter((t) => t.type === 'Emprestado' && t.status !== 'deleted')
+    .reduce((soma, t) => soma + obterValorNoPeriodo(t, periodo, dataReferencia), 0);
 };
 
-export const calcularSaldo = (transacoes) => {
-  return calcularTotalRecebido(transacoes) - calcularTotalGasto(transacoes);
+export const calcularSaldo = (
+  transacoes,
+  periodo = PERIODOS_RELATORIO.ESTE_MES,
+  dataReferencia = new Date()
+) => {
+  return (
+    calcularTotalRecebido(transacoes, periodo, dataReferencia) -
+    calcularTotalGasto(transacoes, periodo, dataReferencia)
+  );
 };
 
-export const calcularMediaDiaria = (transacoes) => {
-  const hoje = new Date();
-  const diaAtual = Math.max(1, hoje.getDate());
-  const totalGasto = calcularTotalGasto(transacoes);
-  
-  // Média é o quanto gastou no mês dividido pelo dia atual do mês
-  return totalGasto / diaAtual;
+export const calcularMediaDiaria = (
+  transacoes,
+  periodo = PERIODOS_RELATORIO.ESTE_MES,
+  dataReferencia = new Date()
+) => {
+  const totalGasto = calcularTotalGasto(transacoes, periodo, dataReferencia);
+  if (totalGasto === 0) return 0;
+
+  let dias = Math.max(1, dataReferencia.getDate());
+
+  if (periodo === PERIODOS_RELATORIO.ULTIMOS_3_MESES) {
+    const inicio = new Date(dataReferencia.getFullYear(), dataReferencia.getMonth() - 2, 1);
+    dias = Math.max(1, Math.ceil((dataReferencia - inicio) / (1000 * 60 * 60 * 24)) + 1);
+  } else if (periodo === PERIODOS_RELATORIO.ESTE_ANO) {
+    const inicioAno = new Date(dataReferencia.getFullYear(), 0, 1);
+    dias = Math.max(1, Math.ceil((dataReferencia - inicioAno) / (1000 * 60 * 60 * 24)) + 1);
+  } else if (periodo === PERIODOS_RELATORIO.TUDO) {
+    const datasValidas = (transacoes || [])
+      .map((t) => new Date(t.created_at))
+      .filter((d) => !isNaN(d.getTime()));
+    if (datasValidas.length > 0) {
+      const menorData = new Date(Math.min(...datasValidas));
+      dias = Math.max(1, Math.ceil((dataReferencia - menorData) / (1000 * 60 * 60 * 24)) + 1);
+    }
+  }
+
+  return totalGasto / dias;
 };
 
 // ===========================================
 // CÁLCULOS POR CATEGORIA
 // ===========================================
 
-export const calcularGastosPorCategoria = (transacoes) => {
+export const calcularGastosPorCategoria = (
+  transacoes,
+  periodo = PERIODOS_RELATORIO.ESTE_MES,
+  dataReferencia = new Date()
+) => {
   const agrupado = {};
-  
-  transacoes
-    .filter((t) => t.type !== 'Emprestado')
+
+  (transacoes || [])
+    .filter((t) => t.type !== 'Emprestado' && t.status !== 'deleted')
     .forEach((t) => {
-      const valorNoMes = obterValorNoMesAtual(t);
-      if (valorNoMes > 0) {
+      const valorPeriodo = obterValorNoPeriodo(t, periodo, dataReferencia);
+      if (valorPeriodo > 0) {
         const categoria = t.category || 'Outros';
-        agrupado[categoria] = (agrupado[categoria] || 0) + valorNoMes;
+        agrupado[categoria] = (agrupado[categoria] || 0) + valorPeriodo;
       }
     });
 
@@ -110,18 +215,21 @@ export const calcularGastosPorCategoria = (transacoes) => {
 // CÁLCULOS PARA GRÁFICO DE EVOLUÇÃO
 // ===========================================
 
-export const calcularEvolucaoGastos = (transacoes) => {
-  // Pega apenas as que têm valor no mês atual (exclui meses passados)
-  const despesasDoMes = transacoes
-    .filter((t) => t.type !== 'Emprestado')
-    .map(t => ({
+export const calcularEvolucaoGastos = (
+  transacoes,
+  periodo = PERIODOS_RELATORIO.ESTE_MES,
+  dataReferencia = new Date()
+) => {
+  const despesasPeriodo = (transacoes || [])
+    .filter((t) => t.type !== 'Emprestado' && t.status !== 'deleted')
+    .map((t) => ({
       ...t,
-      valorMes: obterValorNoMesAtual(t)
+      valorPeriodo: obterValorNoPeriodo(t, periodo, dataReferencia),
     }))
-    .filter(t => t.valorMes > 0)
+    .filter((t) => t.valorPeriodo > 0)
     .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
-  if (despesasDoMes.length === 0) {
+  if (despesasPeriodo.length === 0) {
     return { labels: [], valores: [] };
   }
 
@@ -129,16 +237,82 @@ export const calcularEvolucaoGastos = (transacoes) => {
   const valores = [];
   let acumulado = 0;
 
-  despesasDoMes.forEach((t) => {
-    acumulado += t.valorMes;
+  despesasPeriodo.forEach((t) => {
+    acumulado += t.valorPeriodo;
     const data = new Date(t.created_at);
-    // Transações parceladas caem no dia original da compra. Se quiser no dia 1, a lógica seria outra.
-    const label = `${data.getDate().toString().padStart(2, '0')}/${(data.getMonth() + 1).toString().padStart(2, '0')}`;
+    const label = `${data.getDate().toString().padStart(2, '0')}/${(data.getMonth() + 1)
+      .toString()
+      .padStart(2, '0')}`;
     labels.push(label);
-    valores.push(acumulado);
+    valores.push(Number(acumulado.toFixed(2)));
   });
 
   return { labels, valores };
+};
+
+// ===========================================
+// COMPARATIVO REAL (Mês Anterior e Ano Anterior)
+// ===========================================
+
+export const calcularComparativoGastos = (transacoes, dataReferencia = new Date()) => {
+  const anoAtual = dataReferencia.getFullYear();
+  const mesAtual = dataReferencia.getMonth();
+
+  const dataMesAnterior = new Date(anoAtual, mesAtual - 1, 1);
+  const anoMesAnterior = dataMesAnterior.getFullYear();
+  const mesAnterior = dataMesAnterior.getMonth();
+
+  const despesas = (transacoes || []).filter(
+    (t) => t.type !== 'Emprestado' && t.status !== 'deleted'
+  );
+
+  const gastoAtual = despesas.reduce(
+    (s, t) => s + obterValorNoMesEspecifico(t, anoAtual, mesAtual),
+    0
+  );
+  const gastoMesAnterior = despesas.reduce(
+    (s, t) => s + obterValorNoMesEspecifico(t, anoMesAnterior, mesAnterior),
+    0
+  );
+  const gastoAnoAnterior = despesas.reduce(
+    (s, t) => s + obterValorNoMesEspecifico(t, anoAtual - 1, mesAtual),
+    0
+  );
+
+  const montarComparacao = (atual, base, labelPeriodo) => {
+    if (base <= 0) {
+      return {
+        valorBase: 0,
+        variacaoPercentual: null,
+        subiu: atual > 0,
+        semHistorico: true,
+        descricao: atual > 0
+          ? `Sem registros em ${labelPeriodo} para comparar`
+          : `Sem gastos registrados nos dois períodos`,
+      };
+    }
+
+    const variacao = ((atual - base) / base) * 100;
+    const subiu = variacao > 0;
+    return {
+      valorBase: base,
+      variacaoPercentual: variacao,
+      subiu,
+      semHistorico: false,
+      descricao:
+        Math.abs(variacao) < 0.1
+          ? `Gasto estável em relação a ${labelPeriodo}`
+          : subiu
+          ? `Você gastou mais que ${labelPeriodo}`
+          : `Você economizou em relação a ${labelPeriodo}`,
+    };
+  };
+
+  return {
+    gastoAtual,
+    mesAnterior: montarComparacao(gastoAtual, gastoMesAnterior, 'o mês anterior'),
+    anoAnterior: montarComparacao(gastoAtual, gastoAnoAnterior, 'o ano anterior'),
+  };
 };
 
 // ===========================================
@@ -146,23 +320,25 @@ export const calcularEvolucaoGastos = (transacoes) => {
 // ===========================================
 
 export const filtrarPorTipo = (transacoes, filtro) => {
+  const ativas = (transacoes || []).filter((t) => t.status !== 'deleted');
   switch (filtro) {
     case 'entradas':
-      return transacoes.filter((t) => t.type === 'Emprestado');
+      return ativas.filter((t) => t.type === 'Emprestado');
     case 'saidas':
-      return transacoes.filter((t) => t.type !== 'Emprestado');
+      return ativas.filter((t) => t.type !== 'Emprestado');
     default:
-      return transacoes;
+      return ativas;
   }
 };
 
 export const filtrarPorCategoria = (transacoes, categoria) => {
-  if (categoria === 'todas' || !categoria) return transacoes;
-  return transacoes.filter((t) => t.category === categoria);
+  const ativas = (transacoes || []).filter((t) => t.status !== 'deleted');
+  if (categoria === 'todas' || !categoria) return ativas;
+  return ativas.filter((t) => t.category === categoria);
 };
 
-export const filtrarMesAtual = (transacoes) => {
-  // Mantemos o conceito de "transação impacta o mês atual" (seja à vista ou parcelado)
-  return transacoes.filter((t) => obterValorNoMesAtual(t) > 0);
+export const filtrarMesAtual = (transacoes, dataReferencia = new Date()) => {
+  return (transacoes || []).filter(
+    (t) => t.status !== 'deleted' && obterValorNoMesAtual(t, dataReferencia) > 0
+  );
 };
-

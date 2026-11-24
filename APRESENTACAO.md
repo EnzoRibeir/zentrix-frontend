@@ -27,24 +27,24 @@ O foco no Frontend foi criar uma **alta performance** com uma **experiência de 
 ## 3. Backend e Arquitetura Serverless
 O backend é o motor de processamento, desenhado para ser enxuto, inteligente e seguro.
 
-*   **Paradigma Serverless (AWS Lambda):** Escrito em **Python 3.11**. O código não fica em um servidor rodando 24 horas. Ele "acorda", executa e consome recursos apenas quando um evento acontece. Isso garante **redução de custos** e **escalabilidade horizontal infinita**.
-*   **Padrão "Single Entry Point":** O arquivo `v12.py` possui uma função raiz `lambda_handler` que atua como um roteador principal (Front Controller). Isso centraliza o tratamento de erros globais.
-*   **Desacoplamento:** Frontend e Backend são totalmente independentes e se comunicam apenas via APIs RESTful *Stateless*.
-*   **Banco de Dados:** Utiliza **AWS RDS MySQL** com consultas via pacote `pymysql`. Toda a lógica complexa de rateio de compras parceladas ao longo dos meses é resolvida de forma eficiente no próprio SQL.
+*   **Paradigma Serverless (AWS Lambda):** Escrito em **Python**. O código não fica em um servidor rodando 24 horas. Ele "acorda", executa e consome recursos apenas quando um evento acontece. Isso garante **redução de custos** e **escalabilidade horizontal automática**.
+*   **Padrão "Single Entry Point":** O arquivo `lambda_function.py` possui uma função raiz `lambda_handler` que atua como um roteador principal (Front Controller), tratando CORS, sessões e tratamento global de erros.
+*   **Desacoplamento:** Frontend (`zentrix-frontend`) e Backend (`zentrix-app`) residem em repositórios independentes com pipelines CI/CD próprios via GitHub Actions e comunicam-se via API RESTful *Stateless*.
+*   **Banco de Dados Serverless (Amazon DynamoDB):** Utiliza **Amazon DynamoDB** (`PAY_PER_REQUEST`) via SDK `boto3`, organizado em três tabelas: `ZentrixUsers` (`PK: id`), `ZentrixSessions` (`PK: token` + Sparse GSI `auth_code-index` para troca segura de código SEC03) e `ZentrixTransactions` (`PK: user_id`, `SK: id`). O rateio mensal de compras parceladas é processado de forma determinística tanto no motor de resumo da Lambda quanto no cliente.
 
 ---
 
 ## 4. Segurança da Informação (Modelo STRIDE)
 A segurança foi estruturada baseada no mapeamento de ameaças STRIDE da Microsoft.
 
-*   **Spoofing (Falsificação):** Mitigado pelo login Passwordless do Telegram. O sistema usa *Tokens de Sessão Opacos* (UUIDv4), que são conferidos no banco a cada requisição (`validar_sessao`).
-*   **Tampering (Adulteração):** Prevenção **total** contra **SQL Injection**. Toda a comunicação com o banco usa *Parameterized Queries*, onde as variáveis são sanitizadas pelo driver, sem concatenação de strings.
+*   **Spoofing (Falsificação):** Mitigado pelo login Passwordless do Telegram (`HMAC-SHA256`), fluxo de troca de código temporário de uso único (`SEC03`) e *Tokens de Sessão Opacos* (UUIDv4) conferidos no DynamoDB a cada requisição (`validar_sessao`).
+*   **Tampering (Adulteração):** Uso estrito da API tipada do `boto3` com `ExpressionAttributeNames`, `ExpressionAttributeValues` e `ConditionExpression` no DynamoDB, eliminando concatenação de queries, além de validação HMAC de webhooks (`X-Telegram-Bot-Api-Secret-Token`).
 *   **Repudiation (Repúdio):** Logs imutáveis via AWS CloudWatch. Ações vinculadas a IDs únicos de usuário.
 *   **Information Disclosure (Vazamento):**
-    *   Erros 500 globais não expõem *Stack Traces* (Tracebacks) para o cliente.
-    *   Dados enviados para a IA sofrem sanitização prévia com *Regex* (`sanitizar_frase()`) para evitar ataques de *Prompt Injection*.
-*   **Denial of Service (DoS):** Além do auto-scaling da AWS, rotas de upload pesadas (ex: Faturas CSV) possuem um hard-limit de processamento de `1MB` para não estourar a memória.
-*   **Elevation of Privilege (Elevação de Privilégios / IDOR):** O sistema previne a falha *Insecure Direct Object Reference*. Todas as rotas de alteração e exclusão checam explicitamente se a transação pertence ao dono do token (`AND user_id = %s`).
+    *   Erros 500 e falhas de importação não expõem *Stack Traces* (Tracebacks) ou detalhes internos para o cliente.
+    *   Dados enviados para a IA sofrem sanitização prévia com *Regex* (`sanitizar_frase()`) para mitigar *Prompt Injection*.
+*   **Denial of Service (DoS):** Além do auto-scaling da Lambda e do DynamoDB On-Demand, rotas de upload pesadas (faturas CSV) possuem hard-limit de `1MB`.
+*   **Elevation of Privilege (Elevação de Privilégios / IDOR & Open Redirect):** A chave primária composta `(PK: user_id, SK: id)` em `ZentrixTransactions` garante isolamento físico por usuário contra IDOR, e `_validar_redirect_uri` bloqueia ataques de *Open Redirect*.
 
 ---
 

@@ -1,17 +1,26 @@
 {
   "expo": {
-    "name": "zentrix-app",
+    "name": "Zentrix",
     "slug": "zentrix-app",
     "owner": "mandrak24",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/db796ad4-f760-4d5d-9314-18f636a51620"
+    },
     "scheme": "zentrix",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.zentrix.financas"
     },
     "android": {
+      "package": "com.zentrix.financas",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -42,7 +51,15 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png",
+      "name": "Zentrix — Controle Financeiro Inteligente",
+      "shortName": "Zentrix",
+      "lang": "pt-BR",
+      "themeColor": "#274C77",
+      "backgroundColor": "#EFF2F4",
+      "display": "standalone",
+      "orientation": "portrait"
     },
     "plugins": [
       "expo-font",
@@ -57,6 +74,11 @@
           "androidCollapsedTitle": "Zentrix"
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "db796ad4-f760-4d5d-9314-18f636a51620"
+      }
+    }
   }
 }

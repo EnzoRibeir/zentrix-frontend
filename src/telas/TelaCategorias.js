@@ -64,7 +64,12 @@ export default function TelaCategorias({ route, navigation }) {
     <View style={estilos.container}>
       {/* Header */}
       <View style={estilos.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={estilos.botaoVoltar}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={estilos.botaoVoltar}
+          accessibilityRole="button"
+          accessibilityLabel="Voltar"
+        >
           <Feather name="arrow-left" size={24} color={CORES.textoPrincipal} />
         </TouchableOpacity>
         <View style={estilos.headerTexto}>

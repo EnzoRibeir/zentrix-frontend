@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useRef } from 'react';
-import { StatusBar } from 'react-native';
+import { StatusBar, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useFonts, Itim_400Regular } from '@expo-google-fonts/itim';
 import * as Notifications from 'expo-notifications';
@@ -24,16 +24,17 @@ const AppContent = () => {
   const notificacaoTocadaListener = useRef(null);
 
   useEffect(() => {
+    if (Platform.OS === 'web') return;
+
     // Listener: usuário TOCOU em uma notificação (app em background ou fechado)
     notificacaoTocadaListener.current = Notifications.addNotificationResponseReceivedListener(
       (response) => {
         const dados = response.notification.request.content.data;
 
-        // Redireciona para a tela de transações se for uma notificação de transação
+        // Redireciona corretamente para a aba 'Transações' dentro da Stack 'Principal'
         if (dados?.tipo === 'transacao' || dados?.tipo === 'lote') {
-          // Aguarda a navegação estar pronta
           setTimeout(() => {
-            navegacaoRef.current?.navigate?.('Transacoes');
+            navegacaoRef.current?.navigate?.('Principal', { screen: 'Transações' });
           }, 500);
         }
       }
@@ -62,11 +63,11 @@ const AppContent = () => {
 };
 
 const AppRoot = () => {
-  const [fontesCarregadas] = useFonts({
+  const [fontesCarregadas, erroFonte] = useFonts({
     Itim_400Regular,
   });
 
-  if (!fontesCarregadas) {
+  if (!fontesCarregadas && !erroFonte) {
     return <CarregandoIndicador mensagem="Carregando fontes..." />;
   }
 

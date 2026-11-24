@@ -2,57 +2,75 @@
  * ============================================================
  * API.JS — Serviço de Comunicação com o Backend AWS Lambda
  * ============================================================
- * 
- * Centraliza todas as chamadas HTTP para a API do Zentrix.
- * O backend roda no AWS Lambda e suporta 4 métodos:
- * 
- * - GET    → Listar transações do usuário
- * - POST   → Criar transação (via frase processada por IA) / Autenticação Telegram
- * - DELETE → Excluir transação por ID
+ *
+ * Centraliza todas as chamadas HTTP para a API do Zentrix:
+ * - GET    → Listar transações + perfil, Resumo IA (?action=summary), Troca SEC03 (?action=trocar-codigo)
+ * - POST   → Criar transação via frase IA, Importar CSV C6 Bank, Autenticação Web Telegram
  * - PUT    → Atualizar transação ou perfil do usuário
- * 
- * Endpoint base:
- * https://agog0k90kc.execute-api.sa-east-1.amazonaws.com/default/api-financas-ia
- * 
- * IMPORTANTE: O user_id agora é dinâmico, vindo do contexto de autenticação.
- * Cada usuário do Telegram possui seu próprio ID único.
+ * - DELETE → Excluir transação por ID
  */
 
 // ===========================================
-// CONFIGURAÇÕES
+// CONFIGURAÇÕES EXPORTADAS (Fonte Única)
 // ===========================================
 
 /** URL base da API no AWS API Gateway (região sa-east-1 — São Paulo) */
-const URL_BASE = 'https://agog0k90kc.execute-api.sa-east-1.amazonaws.com/default/api-financas-ia';
+export const URL_BASE = 'https://agog0k90kc.execute-api.sa-east-1.amazonaws.com/default/api-financas-ia';
 
-/** Tempo limite para requisições (em milissegundos) */
-const TIMEOUT_MS = 15000;
+/** URL pública que serve a página HTML de login com o Telegram Widget */
+export const AUTH_PAGE_URL_BASE = `${URL_BASE}?action=telegram-login`;
+
+/** Tempo limite padrão para requisições (em milissegundos) */
+const TIMEOUT_PADRAO_MS = 15000;
+
+/** Tempo limite estendido para operações em lote com IA (CSV / Resumo IA) */
+const TIMEOUT_IA_LOTE_MS = 45000;
 
 // ===========================================
-// FUNÇÕES AUXILIARES E ESTADO GLOBAL
+// ESTADO DE SESSÃO E INTERCEPTOR 401
 // ===========================================
 
 let globalTokenSessao = null;
+let onNaoAutorizadoCallback = null;
 
 export const setTokenSessaoAPI = (token) => {
   globalTokenSessao = token;
 };
 
-/**
- * Wrapper para fetch com timeout.
- * Evita que requisições fiquem pendentes indefinidamente.
- * 
- * @param {string} url - URL da requisição
- * @param {object} opcoes - Opções do fetch (method, headers, body)
- * @returns {Promise<Response>} Resposta da API
- * @throws {Error} Se a requisição exceder o timeout ou falhar
- */
-const fetchComTimeout = async (url, opcoes = {}) => {
-  const controlador = new AbortController();
-  const idTimeout = setTimeout(() => controlador.abort(), TIMEOUT_MS);
+export const getTokenSessaoAPI = () => globalTokenSessao;
 
-  const headers = opcoes.headers || {};
-  if (globalTokenSessao) {
+/**
+ * Registra callback disparado automaticamente quando a API retorna 401
+ * em rotas autenticadas (ex.: sessão de 7 dias expirada).
+ */
+export const setOnNaoAutorizado = (callback) => {
+  onNaoAutorizadoCallback = callback;
+};
+
+/**
+ * Faz o parse seguro da resposta JSON (suportando body duplo-encodado pelo Lambda).
+ */
+const extrairJsonResposta = async (resposta) => {
+  const texto = await resposta.text();
+  if (!texto) return {};
+  try {
+    const parsed = JSON.parse(texto);
+    return typeof parsed === 'string' ? JSON.parse(parsed) : parsed;
+  } catch {
+    return { raw: texto };
+  }
+};
+
+/**
+ * Wrapper para fetch com timeout, injeção automática de Bearer Token
+ * e tratamento centralizado de sessão expirada (401).
+ */
+const fetchComTimeout = async (url, opcoes = {}, timeoutMs = TIMEOUT_PADRAO_MS, autenticado = true) => {
+  const controlador = new AbortController();
+  const idTimeout = setTimeout(() => controlador.abort(), timeoutMs);
+
+  const headers = { ...(opcoes.headers || {}) };
+  if (autenticado && globalTokenSessao) {
     headers['Authorization'] = `Bearer ${globalTokenSessao}`;
   }
 
@@ -63,6 +81,13 @@ const fetchComTimeout = async (url, opcoes = {}) => {
       signal: controlador.signal,
     });
     clearTimeout(idTimeout);
+
+    if (autenticado && resposta.status === 401 && globalTokenSessao) {
+      if (typeof onNaoAutorizadoCallback === 'function') {
+        onNaoAutorizadoCallback();
+      }
+    }
+
     return resposta;
   } catch (erro) {
     clearTimeout(idTimeout);
@@ -74,32 +99,46 @@ const fetchComTimeout = async (url, opcoes = {}) => {
 };
 
 // ===========================================
-// AUTENTICAÇÃO VIA TELEGRAM
+// AUTENTICAÇÃO VIA TELEGRAM (SEC03 + Web)
 // ===========================================
 
 /**
- * Envia os dados de autenticação do Telegram para o backend validar.
- * O backend (v5.py, CASO 2) verifica o hash HMAC-SHA256 usando o
- * TELEGRAM_TOKEN para garantir que os dados são legítimos.
- * 
- * @param {object} dadosTelegram - Dados retornados pelo widget de login do Telegram
- *   { id, first_name, last_name, username, photo_url, auth_date, hash }
- * @returns {Promise<object>} Dados da sessão:
- *   { login: true, token_sessao: "uuid", user_id_interno: "telegram_id", nome: "..." }
- * @throws {Error} Se a validação falhar (hash inválido, expirado, etc)
+ * SEC03: Troca o auth_code temporário recebido no deep link / callback URL
+ * pelo token_sessao definitivo.
+ */
+export const trocarCodigoPorToken = async (authCode) => {
+  if (!authCode) {
+    throw new Error('Código de autenticação ausente.');
+  }
+
+  const url = `${URL_BASE}?action=trocar-codigo&code=${encodeURIComponent(authCode)}`;
+  const resposta = await fetchComTimeout(url, { method: 'GET' }, TIMEOUT_PADRAO_MS, false);
+  const jsonDados = await extrairJsonResposta(resposta);
+
+  if (!resposta.ok) {
+    throw new Error(jsonDados.erro || `Falha ao obter token de sessão (${resposta.status}).`);
+  }
+
+  return jsonDados;
+};
+
+/**
+ * Envia os dados do Telegram Login Widget diretamente via POST (fluxo Web).
  */
 export const autenticarComTelegram = async (dadosTelegram) => {
   try {
-    const resposta = await fetchComTimeout(URL_BASE, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    const resposta = await fetchComTimeout(
+      URL_BASE,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dadosTelegram),
       },
-      body: JSON.stringify(dadosTelegram),
-    });
+      TIMEOUT_PADRAO_MS,
+      false
+    );
 
-    const dados = await resposta.json();
-    let jsonDados = typeof dados === 'string' ? JSON.parse(dados) : dados;
+    const jsonDados = await extrairJsonResposta(resposta);
 
     if (!resposta.ok) {
       throw new Error(jsonDados.erro || `Erro de autenticação: ${resposta.status}`);
@@ -113,19 +152,11 @@ export const autenticarComTelegram = async (dadosTelegram) => {
 };
 
 // ===========================================
-// ENDPOINTS DA API (com user_id dinâmico)
+// ENDPOINTS AUTENTICADOS
 // ===========================================
 
 /**
- * Busca todas as transações do usuário.
- * Usa o método GET com user_id como query parameter.
- * 
- * Endpoint no backend: tratar_get() em v5.py
- * SQL executado: SELECT * FROM transacoes WHERE user_id = %s ORDER BY created_at DESC
- * 
- * @param {string} userId - ID do usuário (Telegram ID)
- * @returns {Promise<object>} { transacoes: Array, usuario: object }
- * @throws {Error} Se a requisição falhar
+ * Busca todas as transações ativas e dados de perfil do usuário.
  */
 export const buscarTransacoes = async (userId) => {
   if (!userId) {
@@ -133,33 +164,29 @@ export const buscarTransacoes = async (userId) => {
   }
 
   try {
-    const url = `${URL_BASE}?user_id=${userId}`;
+    const url = `${URL_BASE}?user_id=${encodeURIComponent(userId)}`;
     const resposta = await fetchComTimeout(url, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
     });
 
+    const jsonDados = await extrairJsonResposta(resposta);
+
     if (!resposta.ok) {
-      throw new Error(`Erro ao buscar transações: ${resposta.status}`);
+      throw new Error(jsonDados.erro || `Erro ao buscar transações: ${resposta.status}`);
     }
 
-    const dados = await resposta.json();
-
-    // A API pode retornar o body como string JSON (duplo encode do Lambda)
-    let jsonDados = dados;
-    if (typeof dados === 'string') {
-      jsonDados = JSON.parse(dados);
-    }
-
-    // Compatibilidade v4 (array direto) vs v5 ({ transacoes: [], usuario: {} })
     if (Array.isArray(jsonDados)) {
       return { transacoes: jsonDados, usuario: null };
     }
-    return { 
-      transacoes: jsonDados.transacoes || [],
-      usuario: jsonDados.usuario || null
+
+    const transacoesAtivas = (jsonDados.transacoes || []).filter(
+      (t) => t.status !== 'deleted'
+    );
+
+    return {
+      transacoes: transacoesAtivas,
+      usuario: jsonDados.usuario || null,
     };
   } catch (erro) {
     console.error('[API] Erro em buscarTransacoes:', erro.message);
@@ -168,15 +195,39 @@ export const buscarTransacoes = async (userId) => {
 };
 
 /**
- * Cria uma nova transação enviando uma frase em linguagem natural.
- * A IA (Gemini) no backend processa a frase e extrai os dados.
- * 
- * @param {string} userId - ID do usuário (Telegram ID)
- * @param {string} frase - Frase descrevendo a transação
- *   Exemplos: "comprei um lanche de 25 reais no débito"
- *             "emprestei 500 pra João parcelado em 6 vezes"
- * @returns {Promise<object>} Dados da transação criada pela IA
- * @throws {Error} Se a requisição falhar ou a IA não conseguir processar
+ * Busca o resumo financeiro mensal consolidado + insight gerado pelo Google Gemini.
+ */
+export const buscarResumoIA = async (userId) => {
+  if (!userId) {
+    throw new Error('user_id é obrigatório para buscar o resumo.');
+  }
+
+  try {
+    const url = `${URL_BASE}?action=summary&user_id=${encodeURIComponent(userId)}`;
+    const resposta = await fetchComTimeout(
+      url,
+      {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      },
+      TIMEOUT_IA_LOTE_MS
+    );
+
+    const jsonDados = await extrairJsonResposta(resposta);
+
+    if (!resposta.ok) {
+      throw new Error(jsonDados.erro || `Erro ao gerar resumo IA: ${resposta.status}`);
+    }
+
+    return jsonDados;
+  } catch (erro) {
+    console.error('[API] Erro em buscarResumoIA:', erro.message);
+    throw erro;
+  }
+};
+
+/**
+ * Cria uma nova transação enviando uma frase em linguagem natural para o Gemini.
  */
 export const criarTransacaoPorFrase = async (userId, frase) => {
   if (!userId) {
@@ -184,28 +235,26 @@ export const criarTransacaoPorFrase = async (userId, frase) => {
   }
 
   try {
-    const resposta = await fetchComTimeout(URL_BASE, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    const resposta = await fetchComTimeout(
+      URL_BASE,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: userId,
+          frase,
+        }),
       },
-      body: JSON.stringify({
-        user_id: userId,
-        frase: frase,
-      }),
-    });
+      TIMEOUT_IA_LOTE_MS
+    );
+
+    const jsonDados = await extrairJsonResposta(resposta);
 
     if (!resposta.ok) {
-      throw new Error(`Erro ao criar transação: ${resposta.status}`);
+      throw new Error(jsonDados.erro || `Erro ao criar transação: ${resposta.status}`);
     }
 
-    const dados = await resposta.json();
-
-    if (typeof dados === 'string') {
-      return JSON.parse(dados);
-    }
-
-    return dados;
+    return jsonDados;
   } catch (erro) {
     console.error('[API] Erro em criarTransacaoPorFrase:', erro.message);
     throw erro;
@@ -213,12 +262,58 @@ export const criarTransacaoPorFrase = async (userId, frase) => {
 };
 
 /**
+ * Importa fatura CSV do C6 Bank autenticada via Bearer Token.
+ * Compatível tanto com retorno JSON estruturado ({ count, importadas })
+ * quanto com string legada ("N itens processados!").
+ */
+export const importarCSV = async (userId, csvText) => {
+  if (!userId) {
+    throw new Error('user_id é obrigatório para importar CSV.');
+  }
+
+  try {
+    const resposta = await fetchComTimeout(
+      URL_BASE,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: userId,
+          csv_text: csvText,
+        }),
+      },
+      TIMEOUT_IA_LOTE_MS
+    );
+
+    const jsonDados = await extrairJsonResposta(resposta);
+
+    if (!resposta.ok) {
+      throw new Error(jsonDados.erro || jsonDados.error || `Erro ao importar CSV (${resposta.status}).`);
+    }
+
+    let quantidade = jsonDados?.count ?? jsonDados?.importadas;
+    if (quantidade === undefined || quantidade === null) {
+      const textoBase = typeof jsonDados?.raw === 'string'
+        ? jsonDados.raw
+        : typeof jsonDados === 'string'
+        ? jsonDados
+        : JSON.stringify(jsonDados);
+      const match = textoBase.match(/(\d+)/);
+      quantidade = match ? parseInt(match[1], 10) : 0;
+    }
+
+    return {
+      count: quantidade,
+      message: jsonDados?.message || `${quantidade} transação(ões) importada(s) com sucesso!`,
+    };
+  } catch (erro) {
+    console.error('[API] Erro em importarCSV:', erro.message);
+    throw erro;
+  }
+};
+
+/**
  * Exclui uma transação pelo seu ID.
- * 
- * @param {string} userId - ID do usuário (Telegram ID)
- * @param {number} idTransacao - ID da transação a ser excluída
- * @returns {Promise<object>} Confirmação de exclusão
- * @throws {Error} Se a requisição falhar
  */
 export const excluirTransacao = async (userId, idTransacao) => {
   if (!userId) {
@@ -228,21 +323,20 @@ export const excluirTransacao = async (userId, idTransacao) => {
   try {
     const resposta = await fetchComTimeout(URL_BASE, {
       method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         user_id: userId,
         id: idTransacao,
       }),
     });
 
+    const jsonDados = await extrairJsonResposta(resposta);
+
     if (!resposta.ok) {
-      throw new Error(`Erro ao excluir transação: ${resposta.status}`);
+      throw new Error(jsonDados.erro || `Erro ao excluir transação: ${resposta.status}`);
     }
 
-    const dados = await resposta.json();
-    return dados;
+    return jsonDados;
   } catch (erro) {
     console.error('[API] Erro em excluirTransacao:', erro.message);
     throw erro;
@@ -250,11 +344,7 @@ export const excluirTransacao = async (userId, idTransacao) => {
 };
 
 /**
- * Atualiza dados de uma transação.
- * 
- * @param {string} userId - ID do usuário (Telegram ID)
- * @param {number} id - ID da transação
- * @param {object} camposAtualizados - Objeto com os campos a serem atualizados
+ * Atualiza dados de uma transação (descrição, valor, categoria, tipo ou status).
  */
 export const atualizarTransacao = async (userId, id, camposAtualizados) => {
   if (!userId) {
@@ -264,23 +354,22 @@ export const atualizarTransacao = async (userId, id, camposAtualizados) => {
   try {
     const resposta = await fetchComTimeout(URL_BASE, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         user_id: userId,
         action: 'update_transaction',
-        id: id,
-        ...camposAtualizados
+        id,
+        ...camposAtualizados,
       }),
     });
 
+    const jsonDados = await extrairJsonResposta(resposta);
+
     if (!resposta.ok) {
-      throw new Error(`Erro ao atualizar transação: ${resposta.status}`);
+      throw new Error(jsonDados.erro || `Erro ao atualizar transação: ${resposta.status}`);
     }
 
-    const dados = await resposta.json();
-    return typeof dados === 'string' ? JSON.parse(dados) : dados;
+    return jsonDados;
   } catch (erro) {
     console.error('[API] Erro em atualizarTransacao:', erro.message);
     throw erro;
@@ -288,10 +377,7 @@ export const atualizarTransacao = async (userId, id, camposAtualizados) => {
 };
 
 /**
- * Atualiza o perfil do usuário.
- * 
- * @param {string} userId - ID do usuário (Telegram ID)
- * @param {object} dadosUsuario - { salario_mensal, limite_mensal, dia_vencimento_fatura }
+ * Atualiza o perfil financeiro do usuário (salário, limite mensal, dia de vencimento).
  */
 export const atualizarUsuario = async (userId, dadosUsuario) => {
   if (!userId) {
@@ -301,22 +387,21 @@ export const atualizarUsuario = async (userId, dadosUsuario) => {
   try {
     const resposta = await fetchComTimeout(URL_BASE, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         user_id: userId,
         action: 'update_user',
-        ...dadosUsuario
+        ...dadosUsuario,
       }),
     });
 
+    const jsonDados = await extrairJsonResposta(resposta);
+
     if (!resposta.ok) {
-      throw new Error(`Erro ao atualizar usuário: ${resposta.status}`);
+      throw new Error(jsonDados.erro || `Erro ao atualizar usuário: ${resposta.status}`);
     }
 
-    const dados = await resposta.json();
-    return typeof dados === 'string' ? JSON.parse(dados) : dados;
+    return jsonDados;
   } catch (erro) {
     console.error('[API] Erro em atualizarUsuario:', erro.message);
     throw erro;

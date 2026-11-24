@@ -2,9 +2,14 @@
  * ============================================================
  * NAVEGACAO_PRINCIPAL.JS — Configuração de Navegação do App
  * ============================================================
+ *
+ * Navegação reativa ao estado de autenticação (AuthContexto):
+ * - Durante verificação inicial → TelaInicializacao (Splash)
+ * - Usuário deslogado (ou sessão expirada 401) → TelaLogin
+ * - Usuário autenticado → Stack Principal + Telas internas
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -13,6 +18,7 @@ import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useTema } from '../contextos/TemaContexto';
+import { useAuth } from '../contextos/AuthContexto';
 import { TIPOGRAFIA } from '../constantes/tipografia';
 
 // Telas
@@ -39,7 +45,13 @@ const BotaoCentralTabBar = ({ aoClicar }) => {
   const estilos = criarEstilos(CORES);
 
   return (
-    <TouchableOpacity style={estilos.botaoCentral} onPress={aoClicar} activeOpacity={0.8}>
+    <TouchableOpacity
+      style={estilos.botaoCentral}
+      onPress={aoClicar}
+      activeOpacity={0.8}
+      accessibilityRole="button"
+      accessibilityLabel="Nova Transação"
+    >
       <View style={estilos.botaoCentralInterno}>
         <Feather name="plus" size={28} color={CORES.principal} />
       </View>
@@ -49,9 +61,7 @@ const BotaoCentralTabBar = ({ aoClicar }) => {
 
 const TabNavigator = () => {
   const { CORES } = useTema();
-  const estilos = criarEstilos(CORES);
   const insets = useSafeAreaInsets();
-
   const [modalVisivel, setModalVisivel] = useState(false);
 
   return (
@@ -64,14 +74,15 @@ const TabNavigator = () => {
           tabBarLabelStyle: {
             ...TIPOGRAFIA.legenda,
             fontSize: 11,
-            marginBottom: Platform.OS === 'ios' ? 0 : 4,
+            lineHeight: 14,
+            marginTop: 2,
           },
           tabBarStyle: {
             backgroundColor: CORES.principal,
             borderTopWidth: 0,
-            height: (Platform.OS === 'ios' ? 60 : 58) + insets.bottom,
-            paddingTop: 8,
-            paddingBottom: insets.bottom,
+            height: 66 + Math.max(8, insets.bottom),
+            paddingTop: 6,
+            paddingBottom: Math.max(10, insets.bottom),
             shadowColor: '#000',
             shadowOffset: { width: 0, height: -4 },
             shadowOpacity: 0.1,
@@ -143,8 +154,22 @@ const TabNavigator = () => {
   );
 };
 
-// Recebe a ref do App.js para permitir navegação ao tocar em notificações
 const NavegacaoPrincipal = React.forwardRef((props, ref) => {
+  const { logado, verificandoSessao } = useAuth();
+  const [exibindoSplash, setExibindoSplash] = useState(true);
+
+  useEffect(() => {
+    if (verificandoSessao) return;
+    const timer = setTimeout(() => {
+      setExibindoSplash(false);
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [verificandoSessao]);
+
+  if (verificandoSessao || exibindoSplash) {
+    return <TelaInicializacao />;
+  }
+
   return (
     <NavigationContainer ref={ref}>
       <Stack.Navigator
@@ -153,12 +178,16 @@ const NavegacaoPrincipal = React.forwardRef((props, ref) => {
           animation: 'slide_from_right',
         }}
       >
-        <Stack.Screen name="Inicializacao" component={TelaInicializacao} options={{ animation: 'fade' }} />
-        <Stack.Screen name="Login" component={TelaLogin} options={{ animation: 'fade' }} />
-        <Stack.Screen name="Principal" component={TabNavigator} options={{ animation: 'fade' }} />
-        <Stack.Screen name="DetalhesTransacao" component={TelaDetalhesTransacao} options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="Notificacoes" component={TelaNotificacoes} options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="Categorias" component={TelaCategorias} options={{ animation: 'slide_from_right' }} />
+        {!logado ? (
+          <Stack.Screen name="Login" component={TelaLogin} options={{ animation: 'fade' }} />
+        ) : (
+          <>
+            <Stack.Screen name="Principal" component={TabNavigator} options={{ animation: 'fade' }} />
+            <Stack.Screen name="DetalhesTransacao" component={TelaDetalhesTransacao} />
+            <Stack.Screen name="Notificacoes" component={TelaNotificacoes} />
+            <Stack.Screen name="Categorias" component={TelaCategorias} />
+          </>
+        )}
       </Stack.Navigator>
     </NavigationContainer>
   );
@@ -166,27 +195,28 @@ const NavegacaoPrincipal = React.forwardRef((props, ref) => {
 
 NavegacaoPrincipal.displayName = 'NavegacaoPrincipal';
 
-const criarEstilos = (CORES) => StyleSheet.create({
-  botaoCentral: {
-    top: -20,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  botaoCentralInterno: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: CORES.destaque,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 3,
-    borderColor: CORES.branco,
-    shadowColor: CORES.principal,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-});
+const criarEstilos = (CORES) =>
+  StyleSheet.create({
+    botaoCentral: {
+      top: -20,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    botaoCentralInterno: {
+      width: 58,
+      height: 58,
+      borderRadius: 29,
+      backgroundColor: CORES.destaque,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderWidth: 3,
+      borderColor: CORES.branco,
+      shadowColor: CORES.principal,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 6,
+    },
+  });
 
 export default NavegacaoPrincipal;

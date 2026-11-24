@@ -1,15 +1,7 @@
 /**
  * ============================================================
- * FILTRO_ABAS.JS — Componente de Abas/Tabs
+ * FILTRO_ABAS.JS — Componente de Abas/Tabs Horizontais
  * ============================================================
- * 
- * Renderiza abas horizontais para filtrar conteúdo.
- * Usado em: TelaTransacoes (Todas/Entradas/Saídas),
- *           TelaNotificacoes (Todas/Transações/Alertas/Sistema),
- *           TelaRelatorios (Este mês/Últimos 3 meses/Este ano).
- * 
- * Comportamento: Apenas uma aba pode estar selecionada por vez.
- * A aba selecionada tem fundo azul escuro (#274C77) e texto branco.
  */
 
 import React from 'react';
@@ -18,20 +10,6 @@ import { useTema } from '../contextos/TemaContexto';
 import { TIPOGRAFIA } from '../constantes/tipografia';
 import { ESPACAMENTOS } from '../constantes/espacamentos';
 
-/**
- * Abas horizontais para filtragem de conteúdo.
- * 
- * @param {Array<string>} abas - Lista de labels das abas
- * @param {string} abaSelecionada - Label da aba ativa
- * @param {function} aoSelecionarAba - Callback com o label da aba clicada
- * 
- * @example
- * <FiltroAbas
- *   abas={['Todas', 'Entradas', 'Saídas']}
- *   abaSelecionada={filtroAtivo}
- *   aoSelecionarAba={setFiltroAtivo}
- * />
- */
 const FiltroAbas = ({ abas, abaSelecionada, aoSelecionarAba }) => {
   const { CORES } = useTema();
   const estilos = criarEstilos(CORES);
@@ -48,14 +26,12 @@ const FiltroAbas = ({ abas, abaSelecionada, aoSelecionarAba }) => {
           return (
             <TouchableOpacity
               key={aba}
-              style={[
-                estilos.aba,
-                estaSelecionada && estilos.abaSelecionada,
-              ]}
+              style={[estilos.aba, estaSelecionada && estilos.abaSelecionada]}
               onPress={() => aoSelecionarAba(aba)}
               activeOpacity={0.7}
             >
               <Text
+                numberOfLines={1}
                 style={[
                   estilos.abaTexto,
                   estaSelecionada && estilos.abaTextoSelecionado,
@@ -71,40 +47,43 @@ const FiltroAbas = ({ abas, abaSelecionada, aoSelecionarAba }) => {
   );
 };
 
-const criarEstilos = (CORES) => StyleSheet.create({
-  container: {
-    backgroundColor: CORES.branco,
-    borderRadius: ESPACAMENTOS.raioBordaCompleto,
-    padding: 4,
-    marginBottom: ESPACAMENTOS.espacoEntreCards,
-    /* Sombra sutil */
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 1,
-  },
-  scrollConteudo: {
-    flexDirection: 'row',
-  },
-  aba: {
-    flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: ESPACAMENTOS.raioBordaCompleto,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  abaSelecionada: {
-    backgroundColor: CORES.principal,
-  },
-  abaTexto: {
-    ...TIPOGRAFIA.corpoPequeno,
-    color: CORES.textoSecundario,
-  },
-  abaTextoSelecionado: {
-    color: CORES.branco,
-  },
-});
+const criarEstilos = (CORES) =>
+  StyleSheet.create({
+    container: {
+      backgroundColor: CORES.branco,
+      borderRadius: ESPACAMENTOS.raioBordaCompleto,
+      padding: 4,
+      marginBottom: ESPACAMENTOS.espacoEntreCards,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.04,
+      shadowRadius: 4,
+      elevation: 1,
+    },
+    scrollConteudo: {
+      flexDirection: 'row',
+      flexGrow: 1,
+      justifyContent: 'space-between',
+      gap: 4,
+    },
+    aba: {
+      paddingVertical: 10,
+      paddingHorizontal: 14,
+      borderRadius: ESPACAMENTOS.raioBordaCompleto,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    abaSelecionada: {
+      backgroundColor: CORES.principal,
+    },
+    abaTexto: {
+      ...TIPOGRAFIA.corpoPequeno,
+      fontSize: 13,
+      color: CORES.textoSecundario,
+    },
+    abaTextoSelecionado: {
+      color: CORES.branco,
+    },
+  });
 
 export default FiltroAbas;
